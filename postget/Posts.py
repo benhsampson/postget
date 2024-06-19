@@ -11,7 +11,6 @@ import os
 import shutil
 import random
 from selenium.webdriver.chrome.options import Options
-from datetime import datetime
 from .exceptions.exceptions import WrongDateString, NoTweetsReturned, ElementNotLoaded
 
 # Regex to match the image link
@@ -28,6 +27,11 @@ ACTUAL_VIDEO_PREVIEW_PATTERN = '^https:\/\/pbs\.twimg\.com\/ext_tw_video_thumb.*
 
 # Target url to be scraped
 TARGET_URL = 'https://www.twitter.com/login'
+
+INITIAL_WAIT_TIME = 0.6
+TIME_BETWEEN_KEY_PRESSES = 0.1
+TIME_BEFORE_SUBMIT = 1.0
+TIME_BEFORE_TWEETS_LOAD = 5.0
 
 class Posts:
     def __init__(self, username: str, password: str, query: str, email_address: str, wait_scroll_base: int = 15, wait_scroll_epsilon :float = 5, num_scrolls: int = 10, mode: int = 0, since_id: int = -1, max_id: int = -1, since: str = 'none', until: str = 'none', since_time: str = 'none', until_time: str = 'none', headless: bool = False, chromedriver: str = 'none', root: bool=False):
@@ -132,17 +136,18 @@ class Posts:
         except TimeoutException:
             raise ElementNotLoaded('Username input not loaded')
         
-        time.sleep(0.7)
+        time.sleep(INITIAL_WAIT_TIME)
         for character in self.username:
             username_input.send_keys(character)
-            time.sleep(0.3) # pause for 0.3 seconds
+            time.sleep(TIME_BETWEEN_KEY_PRESSES)
         # username_input.send_keys('send username here') -> can also be used, but hey ... my robot is a human
         try:
-            button = self.wait.until(EC.element_to_be_clickable((By.XPATH, "/html/body/div/div/div/div[1]/div/div/div/div/div/div/div[2]/div[2]/div/div/div[2]/div[2]/div/div/div/div[6]/div")))
+            button = next(b for b in self.driver.find_elements(By.TAG_NAME, "button") if b.get_attribute('innerText') == 'Next')
+            button = self.wait.until(EC.element_to_be_clickable(button))
         except TimeoutException:
             raise ElementNotLoaded('Button to be pressed after the username input not loaded')
         
-        time.sleep(1)
+        time.sleep(TIME_BEFORE_SUBMIT)
         button.click()
 
         # Input password
@@ -151,16 +156,18 @@ class Posts:
         except TimeoutException:
             raise ElementNotLoaded('Password input not loaded')
         
-        time.sleep(0.7)
+        time.sleep(INITIAL_WAIT_TIME)
         for character in self.password:
             password_input.send_keys(character)
-            time.sleep(0.3) # pause for 0.3 seconds
+            time.sleep(TIME_BETWEEN_KEY_PRESSES)
 
         try:
-            button = self.wait.until(EC.element_to_be_clickable((By.XPATH, "/html/body/div/div/div/div[1]/div/div/div/div/div/div/div[2]/div[2]/div/div/div[2]/div[2]/div[2]/div/div[1]/div/div/div/div")))
+            button = next(b for b in self.driver.find_elements(By.TAG_NAME, "button") if b.get_attribute('innerText') == 'Log in')
+            button = self.wait.until(EC.element_to_be_clickable(button))
+            print(button.get_attribute('innerText'))
         except TimeoutException:
             raise ElementNotLoaded('Button to be pressed after the password input not loaded')
-        time.sleep(1)
+        time.sleep(TIME_BEFORE_SUBMIT)
 
         button.click()
 
@@ -214,7 +221,7 @@ class Posts:
                 raise ElementNotLoaded(f'Searchbox not loaded in time. Check {file_path} for more details.')
         # //TODO: clear query, the second query changes location to be opened
 
-        time.sleep(0.7)
+        time.sleep(INITIAL_WAIT_TIME)
         searchbox.clear()
 
         self.input_query = self.query
@@ -235,11 +242,11 @@ class Posts:
 
         for character in self.input_query:
             searchbox.send_keys(character)
-            time.sleep(0.3)
+            time.sleep(TIME_BETWEEN_KEY_PRESSES)
         
         searchbox.send_keys(Keys.ENTER)
         
-        pause_time = self.compute_scroll_pause_time()
+        pause_time = TIME_BEFORE_TWEETS_LOAD
         print(f'[postget]: Search performed successfully, waiting first content to load. Waiting {pause_time} seconds')
         time.sleep(pause_time)
         
@@ -297,11 +304,17 @@ class Posts:
 
             for raw_tweet in self.raw_tweets:
                 # get the <a>...</a> tag containing the string about the id of the discussion (composed of: <username>/status/<id>)
-                username_tweet_id = raw_tweet.find('a', {'class':"css-4rbku5 css-18t94o4 css-901oao r-1bwzh9t r-1loqt21 r-xoduu5 r-1q142lx r-1w6e6rj r-37j5jr r-a023e6 r-16dba41 r-9aw3ui r-rjixqe r-bcqeeo r-3s2u2q r-qvutc0"})
+                # username_tweet_id = raw_tweet.find('a', {'class':"css-4rbku5 css-18t94o4 css-901oao r-1bwzh9t r-1loqt21 r-xoduu5 r-1q142lx r-1w6e6rj r-37j5jr r-a023e6 r-16dba41 r-9aw3ui r-rjixqe r-bcqeeo r-3s2u2q r-qvutc0"})
+                try:
+                    username_tweet_id = next(a for a in raw_tweet.find_all('a') if a.text.startswith('@'))
+                except StopIteration:
+                    username_tweet_id = None
                 
                 # checking if it is an actual tweet, or an empty div at the end of the tweets
 
-                if type(username_tweet_id) != type(None):
+                if username_tweet_id is not None:
+                    print(username_tweet_id)
+                    print(username_tweet_id['href'].split('/'))
                     # checking if case since_id and max_id are set, it if not in the range [since_id, max_id]), and if advanced queries for times are not set, then we will search by ids.
                     if self.since_id != -1 and self.max_id != -1 and (self.since == 'none' and self.until == 'none') and (self.since_time == 'none' and self.until_time == 'none'):
                         
@@ -311,9 +324,12 @@ class Posts:
                             if username_tweet_id['href'] not in self.tweets.keys():
 
                                 # Retrieving username, tweet id, discussion link, and timestamp
-                                iso_timestamp = username_tweet_id.find('time')['datetime']
-                                dt = datetime.strptime(iso_timestamp,'%Y-%m-%dT%H:%M:%S.%fZ')
-                                timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
+                                # iso_timestamp = username_tweet_id.find('time')['datetime']
+                                # dt = datetime.strptime(iso_timestamp,'%Y-%m-%dT%H:%M:%S.%fZ')
+                                # timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
+                                # todo:
+                                iso_timestamp = None
+                                timestamp = None
                                 discussion_link = f'https://twitter.com{username_tweet_id["href"]}'
 
                                 # Retrieving tweet text
@@ -349,9 +365,11 @@ class Posts:
                         if username_tweet_id['href'] not in self.tweets.keys():
                             
                             # Retrieving username, tweet id, discussion link, and timestamp
-                            iso_timestamp = username_tweet_id.find('time')['datetime']
-                            dt = datetime.strptime(iso_timestamp,'%Y-%m-%dT%H:%M:%S.%fZ')
-                            timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
+                            # iso_timestamp = username_tweet_id.find('time')['datetime']
+                            # dt = datetime.strptime(iso_timestamp,'%Y-%m-%dT%H:%M:%S.%fZ')
+                            # timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
+                            iso_timestamp = None
+                            timestamp = None
                             discussion_link = f'https://twitter.com{username_tweet_id["href"]}'
 
                             # Retrieving tweet text
@@ -362,7 +380,7 @@ class Posts:
 
                             # append username, tweet id, tweet text, to the dictionary, and initializing the list of links to images and video preview
                             self.tweets[username_tweet_id['href']] = {"username": username_tweet_id['href'].split('/')[1], 
-                                                                      "tweet_id": username_tweet_id['href'].split('/')[3], 
+                                                                      "tweet_id": username_tweet_id['href'].split('/')[1], 
                                                                       "tweet_text": tweet_text, 
                                                                       "discussion_link": discussion_link, 
                                                                       "iso_8601_timestamp": iso_timestamp, 
